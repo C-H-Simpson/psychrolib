@@ -45,6 +45,7 @@ Note from the Authors
 import math
 from enum import Enum, auto
 from typing import Optional
+from numba import njit
 
 
 #######################################################################################################
@@ -195,7 +196,7 @@ def isIP() -> bool:
 #######################################################################################################
 # Conversion between temperature units
 #######################################################################################################
-
+@njit
 def GetTRankineFromTFahrenheit(TFahrenheit: float) -> float:
     """
     Utility function to convert temperature to degree Rankine (°R)
@@ -237,6 +238,7 @@ def GetTFahrenheitFromTRankine(TRankine: float) -> float:
     """
     return TRankine - ZERO_FAHRENHEIT_AS_RANKINE
 
+@njit
 def GetTKelvinFromTCelsius(TCelsius: float) -> float:
     """
     Utility function to convert temperature to Kelvin (K)
@@ -609,17 +611,50 @@ def GetTWetBulbFromHumRatio(TDryBulb: float, HumRatio: float, Pressure: float) -
 
     TDewPoint = GetTDewPointFromHumRatio(TDryBulb, BoundedHumRatio, Pressure)
 
+    TWetBulb =  GetTWetBulbFromHumRatio_bisection_loop_(
+            isIP(), PSYCHROLIB_TOLERANCE, MAX_ITER_COUNT, 
+            TDryBulb, TDewPoint, Pressure, BoundedHumRatio)
+
+    return TWetBulb
+
+
+@njit
+def GetTWetBulbFromHumRatio_bisection_loop_(_isIP, psychrolib_tolerance, max_iter_count, TDryBulb, TDewPoint, Pressure, BoundedHumRatio):
+    """
+    Numba-friendly helper function for GetTWetBulbFromHumRatio.
+
+    Args:
+        TWetBulbSup: Maximum
+        TDryBulb : Dry-bulb temperature in °F [IP] or °C [SI]
+        HumRatio : Humidity ratio in lb_H₂O lb_Air⁻¹ [IP] or kg_H₂O kg_Air⁻¹ [SI]
+        Pressure : Atmospheric pressure in Psi [IP] or Pa [SI]
+
+    Returns:
+        Wet-bulb temperature in °F [IP] or °C [SI]
+
+    Notes:
+        Numba treats global variables as compile-time constants. Therefore, the variables that would be global are
+        passed as arguments.
+
+    Reference:
+        ASHRAE Handbook - Fundamentals (2017) ch. 1 eqn 33 and 35 solved for Tstar
+
+    """
     # Initial guesses
     TWetBulbSup = TDryBulb
     TWetBulbInf = TDewPoint
-    TWetBulb = (TWetBulbInf + TWetBulbSup) / 2
+    TWetBulb = (TWetBulbInf + TWetBulbSup) / 2 
 
     index = 1
+
     # Bisection loop
-    while ((TWetBulbSup - TWetBulbInf) > PSYCHROLIB_TOLERANCE):
+    while ((TWetBulbSup - TWetBulbInf) > psychrolib_tolerance):
 
         # Compute humidity ratio at temperature Tstar
-        Wstar = GetHumRatioFromTWetBulb(TDryBulb, TWetBulb, Pressure)
+        if _isIP:
+            Wstar = GetHumRatioFromTWetBulb_(_isIP, TDryBulb, TWetBulb, Pressure)
+        else:
+            Wstar = GetHumRatioFromTWetBulb_(_isIP, TDryBulb, TWetBulb, Pressure)
 
         # Get new bounds
         if Wstar > BoundedHumRatio:
@@ -630,11 +665,50 @@ def GetTWetBulbFromHumRatio(TDryBulb: float, HumRatio: float, Pressure: float) -
         # New guess of wet bulb temperature
         TWetBulb = (TWetBulbSup + TWetBulbInf) / 2
 
-        if (index >= MAX_ITER_COUNT):
+        if (index >= max_iter_count):
             raise ValueError("Convergence not reached in GetTWetBulbFromHumRatio. Stopping.")
-
+            
         index = index + 1
     return TWetBulb
+
+@njit
+def GetHumRatioFromTWetBulb_(_isIP: bool, TDryBulb: float, TWetBulb: float, Pressure: float) -> float:
+    """
+    Return humidity ratio given dry-bulb temperature, wet-bulb temperature, and pressure.
+
+    Args:
+        TDryBulb : Dry-bulb temperature in °F [IP] or °C [SI]
+        TWetBulb : Wet-bulb temperature in °F [IP] or °C [SI]
+        Pressure : Atmospheric pressure in Psi [IP] or Pa [SI]
+
+    Returns:
+        Humidity ratio in lb_H₂O lb_Air⁻¹ [IP] or kg_H₂O kg_Air⁻¹ [SI]
+
+    Reference:
+        ASHRAE Handbook - Fundamentals (2017) ch. 1 eqn 33 and 35
+
+    """
+    if TWetBulb > TDryBulb:
+        raise ValueError("Wet bulb temperature is above dry bulb temperature")
+
+    Wsstar = GetSatHumRatio_(_isIP, TWetBulb, Pressure)
+
+    if _isIP:
+       if TWetBulb >= FREEZING_POINT_WATER_IP:
+           HumRatio = ((1093 - 0.556 * TWetBulb) * Wsstar - 0.240 * (TDryBulb - TWetBulb)) \
+                    / (1093 + 0.444 * TDryBulb - TWetBulb)
+       else:
+           HumRatio = ((1220 - 0.04 * TWetBulb) * Wsstar - 0.240 * (TDryBulb - TWetBulb)) \
+                    / (1220 + 0.444 * TDryBulb - 0.48*TWetBulb)
+    else:
+       if TWetBulb >= FREEZING_POINT_WATER_SI:
+           HumRatio = ((2501. - 2.326 * TWetBulb) * Wsstar - 1.006 * (TDryBulb - TWetBulb)) \
+                    / (2501. + 1.86 * TDryBulb - 4.186 * TWetBulb)
+       else:
+           HumRatio = ((2830. - 0.24 * TWetBulb) * Wsstar - 1.006 * (TDryBulb - TWetBulb)) \
+                    / (2830. + 1.86 * TDryBulb - 2.1 * TWetBulb)
+    # Validity check.
+    return max(HumRatio, MIN_HUM_RATIO)
 
 def GetHumRatioFromTWetBulb(TDryBulb: float, TWetBulb: float, Pressure: float) -> float:
     """
@@ -998,6 +1072,54 @@ def GetHumRatioFromEnthalpyAndTDryBulb(MoistAirEnthalpy: float, TDryBulb: float)
 #######################################################################################################
 # Saturated Air Calculations
 #######################################################################################################
+@njit
+def GetSatVapPres_(_isIP: bool, TDryBulb: float) -> float:
+    """
+    Return saturation vapor pressure given dry-bulb temperature.
+
+    Args:
+        TDryBulb : Dry-bulb temperature in °F [IP] or °C [SI]
+
+    Returns:
+        Vapor pressure of saturated air in Psi [IP] or Pa [SI]
+
+    Reference:
+        ASHRAE Handbook - Fundamentals (2017) ch. 1  eqn 5 & 6
+        Important note: the ASHRAE formulae are defined above and below the freezing point but have
+        a discontinuity at the freezing point. This is a small inaccuracy on ASHRAE's part: the formulae
+        should be defined above and below the triple point of water (not the feezing point) in which case
+        the discontinuity vanishes. It is essential to use the triple point of water otherwise function
+        GetTDewPointFromVapPres, which inverts the present function, does not converge properly around
+        the freezing point.
+
+    """
+    if _isIP:
+        if (TDryBulb < -148 or TDryBulb > 392):
+            raise ValueError("Dry bulb temperature must be in range [-148, 392]°F")
+
+        T = GetTRankineFromTFahrenheit(TDryBulb)
+
+        if (TDryBulb <= TRIPLE_POINT_WATER_IP):
+            LnPws = (-1.0214165E+04 / T - 4.8932428 - 5.3765794E-03 * T + 1.9202377E-07 * T**2 \
+                  + 3.5575832E-10 * math.pow(T, 3) - 9.0344688E-14 * math.pow(T, 4) + 4.1635019 * math.log(T))
+        else:
+            LnPws = -1.0440397E+04 / T - 1.1294650E+01 - 2.7022355E-02* T + 1.2890360E-05 * T**2 \
+                  - 2.4780681E-09 * math.pow(T, 3) + 6.5459673 * math.log(T)
+    else:
+        if (TDryBulb < -100 or TDryBulb > 200):
+            raise ValueError("Dry bulb temperature must be in range [-100, 200]°C")
+
+        T = GetTKelvinFromTCelsius(TDryBulb)
+
+        if (TDryBulb <= TRIPLE_POINT_WATER_SI):
+            LnPws = -5.6745359E+03 / T + 6.3925247 - 9.677843E-03 * T + 6.2215701E-07 * T**2 \
+                  + 2.0747825E-09 * math.pow(T, 3) - 9.484024E-13 * math.pow(T, 4) + 4.1635019 * math.log(T)
+        else:
+            LnPws = -5.8002206E+03 / T + 1.3914993 - 4.8640239E-02 * T + 4.1764768E-05 * T**2 \
+                  - 1.4452093E-08 * math.pow(T, 3) + 6.5459673 * math.log(T)
+
+    SatVapPres = math.exp(LnPws)
+    return SatVapPres
 
 def GetSatVapPres(TDryBulb: float) -> float:
     """
@@ -1046,6 +1168,28 @@ def GetSatVapPres(TDryBulb: float) -> float:
 
     SatVapPres = math.exp(LnPws)
     return SatVapPres
+
+@njit
+def GetSatHumRatio_(_isIP: bool, TDryBulb: float, Pressure: float) -> float:
+    """
+    Return humidity ratio of saturated air given dry-bulb temperature and pressure.
+
+    Args:
+        TDryBulb : Dry-bulb temperature in °F [IP] or °C [SI]
+        Pressure : Atmospheric pressure in Psi [IP] or Pa [SI]
+
+    Returns:
+        Humidity ratio of saturated air in lb_H₂O lb_Air⁻¹ [IP] or kg_H₂O kg_Air⁻¹ [SI]
+
+    Reference:
+        ASHRAE Handbook - Fundamentals (2017) ch. 1 eqn 36, solved for W
+
+    """
+    SatVaporPres = GetSatVapPres_(_isIP, TDryBulb)
+    SatHumRatio = 0.621945 * SatVaporPres / (Pressure - SatVaporPres)
+
+    # Validity check.
+    return max(SatHumRatio, MIN_HUM_RATIO)
 
 def GetSatHumRatio(TDryBulb: float, Pressure: float) -> float:
     """
