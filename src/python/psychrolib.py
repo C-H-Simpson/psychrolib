@@ -196,6 +196,7 @@ def isIP() -> bool:
 #######################################################################################################
 # Conversion between temperature units
 #######################################################################################################
+
 @njit
 def GetTRankineFromTFahrenheit(TFahrenheit: float) -> float:
     """
@@ -643,7 +644,7 @@ def GetTWetBulbFromHumRatio_bisection_loop_(_isIP, psychrolib_tolerance, max_ite
     # Initial guesses
     TWetBulbSup = TDryBulb
     TWetBulbInf = TDewPoint
-    TWetBulb = (TWetBulbInf + TWetBulbSup) / 2 
+    TWetBulb = (TWetBulbInf + TWetBulbSup) / 2
 
     index = 1
 
@@ -651,10 +652,7 @@ def GetTWetBulbFromHumRatio_bisection_loop_(_isIP, psychrolib_tolerance, max_ite
     while ((TWetBulbSup - TWetBulbInf) > psychrolib_tolerance):
 
         # Compute humidity ratio at temperature Tstar
-        if _isIP:
-            Wstar = GetHumRatioFromTWetBulb_(_isIP, TDryBulb, TWetBulb, Pressure)
-        else:
-            Wstar = GetHumRatioFromTWetBulb_(_isIP, TDryBulb, TWetBulb, Pressure)
+        Wstar = GetHumRatioFromTWetBulb_(_isIP, TDryBulb, TWetBulb, Pressure)
 
         # Get new bounds
         if Wstar > BoundedHumRatio:
@@ -667,7 +665,7 @@ def GetTWetBulbFromHumRatio_bisection_loop_(_isIP, psychrolib_tolerance, max_ite
 
         if (index >= max_iter_count):
             raise ValueError("Convergence not reached in GetTWetBulbFromHumRatio. Stopping.")
-            
+
         index = index + 1
     return TWetBulb
 
