@@ -303,7 +303,8 @@ def GetTWetBulbFromTDewPoint(TDryBulb: float, TDewPoint: float, Pressure: float)
 
     """
     if TDewPoint > TDryBulb:
-        raise ValueError("Dew point temperature is above dry bulb temperature")
+        return TDryBulb
+         #raise ValueError("Dew point temperature is above dry bulb temperature")
 
     HumRatio = GetHumRatioFromTDewPoint(TDewPoint, Pressure)
     TWetBulb = GetTWetBulbFromHumRatio(TDryBulb, HumRatio, Pressure)
